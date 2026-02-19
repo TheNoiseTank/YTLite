@@ -4,6 +4,55 @@ static UIImage *YTImageNamed(NSString *imageName) {
     return [UIImage imageNamed:imageName inBundle:[NSBundle mainBundle] compatibleWithTraitCollection:nil];
 }
 
+static CGFloat ytlPlaybackRateForVideo(YTSingleVideoController *video) {
+    if (!video) return 1.0;
+
+    if ([video respondsToSelector:@selector(playbackRate)]) {
+        CGFloat rate = video.playbackRate;
+        if (rate > 0) return rate;
+    }
+
+    if ([video respondsToSelector:@selector(activePlaybackRateModel)]) {
+        id rateModel = video.activePlaybackRateModel;
+        if ([rateModel respondsToSelector:@selector(activeRate)]) {
+            CGFloat activeRate = ((YTActivePlaybackRateModel *)rateModel).activeRate;
+            if (activeRate > 0) return activeRate;
+        }
+    }
+
+    return 1.0;
+}
+
+static CGFloat ytlCurrentPlaybackRateForOverlay(YTMainAppVideoPlayerOverlayViewController *overlayVC) {
+    if (!overlayVC) return 1.0;
+
+    YTPlayerViewController *playerVC = overlayVC.parentViewController;
+    if ([playerVC respondsToSelector:@selector(activeVideo)]) {
+        CGFloat rate = ytlPlaybackRateForVideo(playerVC.activeVideo);
+        if (rate > 0) return rate;
+    }
+
+    if ([overlayVC respondsToSelector:@selector(currentPlaybackRate)]) {
+        CGFloat rate = overlayVC.currentPlaybackRate;
+        if (rate > 0) return rate;
+    }
+
+    return 1.0;
+}
+
+static void ytlSetPlaybackRate(YTPlayerViewController *playerVC, YTMainAppVideoPlayerOverlayViewController *overlayVC, CGFloat rate) {
+    CGFloat safeRate = rate > 0 ? rate : 1.0;
+
+    if (playerVC && [playerVC respondsToSelector:@selector(setPlaybackRate:)]) {
+        [playerVC setPlaybackRate:safeRate];
+        return;
+    }
+
+    if (overlayVC && [overlayVC respondsToSelector:@selector(setPlaybackRate:)]) {
+        [overlayVC setPlaybackRate:safeRate];
+    }
+}
+
 // YouTube-X (https://github.com/PoomSmart/YouTube-X/)
 // Background Playback
 %hook YTIPlayabilityStatus
@@ -387,7 +436,7 @@ static UIImage *YTImageNamed(NSString *imageName) {
 void addEndTime(YTPlayerViewController *self, YTSingleVideoController *video, YTSingleVideoTime *time) {
     if (!ytlBool(@"videoEndTime")) return;
 
-    CGFloat rate = video.playbackRate != 0 ? video.playbackRate : 1.0;
+    CGFloat rate = ytlPlaybackRateForVideo(video);
     NSTimeInterval remainingTime = (lround(video.totalMediaTime) - lround(time.time)) / rate;
 
     NSDate *estimatedEndTime = [NSDate dateWithTimeIntervalSinceNow:remainingTime];
@@ -466,7 +515,7 @@ void autoSkipShorts(YTPlayerViewController *self, YTSingleVideoController *video
         YTMainAppVideoPlayerOverlayViewController *overlayVC = (YTMainAppVideoPlayerOverlayViewController *)self.activeVideoPlayerOverlay;
 
         NSArray *speedLabels = @[@0.25, @0.5, @0.75, @1.0, @1.25, @1.5, @1.75, @2.0, @3.0, @4.0, @5.0];
-        [overlayVC setPlaybackRate:[speedLabels[ytlInt(@"autoSpeedIndex")] floatValue]];
+        ytlSetPlaybackRate(self, overlayVC, [speedLabels[ytlInt(@"autoSpeedIndex")] floatValue]);
     }
 }
 
@@ -1302,19 +1351,20 @@ CGFloat rateBeforeSpeedmaster = 1.0;
 
 static void manageSpeedmasterYTLite(UILongPressGestureRecognizer *gesture, YTMainAppVideoPlayerOverlayViewController *delegate, YTInlinePlayerScrubUserEducationView *edu) {
     NSArray *speedLabels = @[@0, @2.0, @0.25, @0.5, @0.75, @1.0, @1.25, @1.5, @1.75, @2.0, @3.0, @4.0, @5.0];
+    YTPlayerViewController *playerVC = delegate.parentViewController;
 
     YTLabel *label = [edu valueForKey:@"_userEducationLabel"];
     edu.labelType = 1;
     [label setValue:[NSString stringWithFormat:@"%@: %@×", LOC(@"PlaybackSpeed"), speedLabels[ytlInt(@"speedIndex")]] forKey:@"text"];
 
     if (gesture.state == UIGestureRecognizerStateBegan) {
-        rateBeforeSpeedmaster = delegate.currentPlaybackRate;
-        [delegate setPlaybackRate:[speedLabels[ytlInt(@"speedIndex")] floatValue]];
+        rateBeforeSpeedmaster = ytlCurrentPlaybackRateForOverlay(delegate);
+        ytlSetPlaybackRate(playerVC, delegate, [speedLabels[ytlInt(@"speedIndex")] floatValue]);
         [edu setVisible:YES];
     }
 
-    else if (gesture.state == UIGestureRecognizerStateEnded) {
-        [delegate setPlaybackRate:rateBeforeSpeedmaster];
+    else if (gesture.state == UIGestureRecognizerStateEnded || gesture.state == UIGestureRecognizerStateCancelled || gesture.state == UIGestureRecognizerStateFailed) {
+        ytlSetPlaybackRate(playerVC, delegate, rateBeforeSpeedmaster);
         [edu setVisible:NO];
     }
 }
